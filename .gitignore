@@ -1,0 +1,31 @@
+# Personal working notes, not part of the project
+CLAUDE.md
+PROJECT.md
+.claude/
+
+# Secrets (see .env.example for the names)
+.env
+.env.*
+!.env.example
+
+# Data, trained models and saved outputs: rebuilt by the notebooks (MovieLens may not be redistributed)
+data/
+models/
+artifacts/
+
+# Environments and caches
+customengine/
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+.DS_Store
+
+# Superseded notebooks
+notebooks/archive/
+
+# Build and backup files
+*.tar.gz
+*.dump
