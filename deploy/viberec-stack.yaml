@@ -1,0 +1,164 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  VibeRec (Step 13, option A): one t4g.micro server running the web app and PostgreSQL + pgvector in Docker,
+  an S3 bucket for the app image and the database backup, and an IAM role for Bedrock + S3. No SSH: use Session Manager.
+  Deleting this stack deletes everything it created (empty the bucket first).
+
+Parameters:
+  InstanceType:
+    Type: String
+    Default: t4g.micro
+    AllowedValues: [t4g.micro, t4g.small]
+    Description: t4g.micro (1 GB) is enough (measured ~300 MB for app + database); t4g.small doubles memory and cost.
+  LatestAmi:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+  BedrockModelProfile:
+    Type: String
+    Default: us.anthropic.claude-haiku-4-5-20251001-v1:0
+  DbPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 12
+    Description: Password for the local database user (the database is not reachable from outside the server).
+
+Resources:
+  Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub viberec-${AWS::AccountId}-${AWS::Region}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+
+  BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref Bucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: UploadFromAdilsMac            # the viberec-bedrock user may upload the image and backup, to this bucket only
+            Effect: Allow
+            Principal: {AWS: !Sub "arn:aws:iam::${AWS::AccountId}:user/viberec-bedrock"}
+            Action: [s3:PutObject, s3:GetObject, s3:ListBucket]
+            Resource: [!GetAtt Bucket.Arn, !Sub "${Bucket.Arn}/*"]
+
+  AppRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: VibeRecAppRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ec2.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore        # browser shell (Session Manager), no SSH keys
+      Policies:
+        - PolicyName: viberec-app
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: Claude
+                Effect: Allow
+                Action: bedrock:InvokeModel                         # also covers the Converse API
+                Resource:
+                  - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${BedrockModelProfile}
+                  - arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0
+              - Sid: Marketplace
+                Effect: Allow
+                Action: [aws-marketplace:ViewSubscriptions, aws-marketplace:Subscribe]
+                Resource: "*"
+              - Sid: Data
+                Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:ListBucket]
+                Resource: [!GetAtt Bucket.Arn, !Sub "${Bucket.Arn}/*"]
+
+  AppProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref AppRole]
+
+  WebSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: VibeRec web (HTTP only; no SSH, no database port)
+      SecurityGroupIngress:
+        - {IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0}
+
+  Server:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref LatestAmi
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref AppProfile
+      SecurityGroupIds: [!GetAtt WebSecurityGroup.GroupId]
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs: {VolumeSize: 20, VolumeType: gp3, DeleteOnTermination: true}
+      Tags: [{Key: Name, Value: viberec}]
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          # First boot: swap, Docker, then wait for the image and database backup in S3 and start everything.
+          set -euxo pipefail
+          fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+          echo '/swapfile none swap sw 0 0' >> /etc/fstab
+          dnf install -y docker
+          systemctl enable --now docker
+          mkdir -p /opt/viberec/data
+          cat > /opt/viberec/env <<EOF
+          VIBEREC_BUCKET=${Bucket}
+          VIBEREC_DB_PASSWORD=${DbPassword}
+          AWS_REGION=${AWS::Region}
+          EOF
+          chmod 600 /opt/viberec/env
+          cat > /opt/viberec/start.sh <<'EOF'
+          #!/bin/bash
+          # Starts (or restarts) the database and the app. Safe to run again after uploading a new image.
+          set -euo pipefail
+          source /opt/viberec/env
+          until aws s3 ls "s3://$VIBEREC_BUCKET/app/viberec-app.tar.gz" >/dev/null 2>&1; do sleep 30; done
+          aws s3 cp "s3://$VIBEREC_BUCKET/app/viberec-app.tar.gz" /tmp/app.tar.gz && docker load -i /tmp/app.tar.gz && rm /tmp/app.tar.gz
+          docker network inspect viberec >/dev/null 2>&1 || docker network create viberec
+          if ! docker ps -a --format '{{.Names}}' | grep -q '^viberec-db$'; then
+            docker run -d --name viberec-db --network viberec --restart unless-stopped \
+              -e POSTGRES_USER=viberec -e POSTGRES_PASSWORD="$VIBEREC_DB_PASSWORD" -e POSTGRES_DB=viberec \
+              -v viberec_pg:/var/lib/postgresql/data pgvector/pgvector:0.8.0-pg16 \
+              -c shared_buffers=128MB -c work_mem=8MB -c max_connections=20
+            until docker exec viberec-db pg_isready -U viberec >/dev/null 2>&1; do sleep 2; done
+            until aws s3 ls "s3://$VIBEREC_BUCKET/db/viberec.dump" >/dev/null 2>&1; do sleep 30; done
+            aws s3 cp "s3://$VIBEREC_BUCKET/db/viberec.dump" /tmp/viberec.dump
+            docker cp /tmp/viberec.dump viberec-db:/tmp/viberec.dump
+            docker exec viberec-db pg_restore -U viberec -d viberec --no-owner /tmp/viberec.dump
+            rm /tmp/viberec.dump
+          fi
+          [ -f /opt/viberec/data/llm_spend_ledger.json ] || aws s3 cp "s3://$VIBEREC_BUCKET/data/llm_spend_ledger.json" /opt/viberec/data/ || true
+          docker rm -f viberec-app >/dev/null 2>&1 || true
+          docker run -d --name viberec-app --network viberec --restart unless-stopped -p 80:8000 \
+            -e VIBEREC_DB_URL="postgresql://viberec:$VIBEREC_DB_PASSWORD@viberec-db:5432/viberec" \
+            -e AWS_REGION="$AWS_REGION" -v /opt/viberec/data:/data viberec-app:latest \
+            uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
+          EOF
+          chmod 700 /opt/viberec/start.sh
+          /opt/viberec/start.sh
+
+Outputs:
+  BucketName:
+    Value: !Ref Bucket
+    Description: Upload the app image to app/ and the database backup to db/ here.
+  WebsiteURL:
+    Value: !Sub http://${Server.PublicDnsName}
+    Description: VibeRec, once the server has finished setting itself up (a few minutes after the uploads).
+  InstanceId:
+    Value: !Ref Server
+  AppRoleName:
+    Value: !Ref AppRole
+    Description: Add this role to the VibeRec-20 budget action, so the $16 Bedrock block covers the server too.

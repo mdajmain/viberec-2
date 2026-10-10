@@ -1,0 +1,12 @@
+# The web app's dependencies only (the notebooks need more; see requirements.txt). Versions match the tested environment.
+fastapi==0.115.6
+uvicorn==0.34.0
+pydantic==2.13.5
+psycopg[binary]==3.2.3
+psycopg-pool==3.2.4
+pgvector==0.3.6
+boto3==1.43.109
+numpy==2.5.3
+pandas==3.0.6
+scipy==1.18.1
+scikit-learn==1.9.1

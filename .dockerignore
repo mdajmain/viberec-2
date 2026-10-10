@@ -1,0 +1,17 @@
+# Build context for deploy/Dockerfile.app: only the app and the source files it imports.
+*
+!app/
+!src/__init__.py
+!src/viberec/__init__.py
+!src/viberec/db_search.py
+!src/viberec/explain.py
+!src/viberec/labels.py
+!src/viberec/llm_budget.py
+!src/viberec/llm_parse.py
+!src/viberec/serve.py
+!src/viberec/taste.py
+!src/viberec/userdata.py
+!src/viberec/cf.py
+!src/viberec/store.py
+!src/viberec/recommenders.py
+!deploy/requirements-app.txt
