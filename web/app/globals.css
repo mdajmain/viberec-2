@@ -1,0 +1,30 @@
+@import "tailwindcss";
+
+/* VibeRec theme: dark and cinematic, warm amber accent. Every colour is a token, used as bg-panel, text-muted, ... */
+@theme {
+  --color-bg: #0c0b10;
+  --color-panel: #16141c;
+  --color-panel-2: #1e1b26;
+  --color-line: #2c2836;
+  --color-ink: #f4f1ea;
+  --color-muted: #a8a29e;
+  --color-accent: #f5a524;
+  --color-accent-ink: #1a1206;
+  --color-good: #4ade80;
+  --color-bad: #f87171;
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+}
+
+/* a soft glow behind the top of every page */
+.page-glow {
+  background: radial-gradient(60rem 24rem at 50% -8rem, rgb(245 165 36 / 0.14), transparent 70%);
+}

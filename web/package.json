@@ -1,0 +1,27 @@
+{
+  "name": "viberec-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "VibeRec website: vibe-first movie search, taste quiz and personal picks (front end for the VibeRec API).",
+  "scripts": {
+    "dev": "next dev --port 3000",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@clerk/nextjs": "6.39.7",
+    "next": "15.5.26",
+    "react": "19.1.9",
+    "react-dom": "19.1.9",
+    "server-only": "0.0.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "4.3.3",
+    "@types/node": "22.20.4",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "tailwindcss": "4.3.3",
+    "typescript": "5.9.3"
+  }
+}
