@@ -5,3 +5,4 @@ out/
 .clerk/
 next-env.d.ts
 *.tsbuildinfo
+.vercel
