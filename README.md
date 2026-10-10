@@ -2,6 +2,8 @@
 
 **Movie recommendations by how a film feels.** Name a film you love and the feel you want — *"something like How to Lose a Guy in 10 Days, but more urban"* — and VibeRec returns films with that vibe, each with a one-line reason it fits. A short taste quiz builds a personal "For you" list, and every choice is explained from the actual parts of its score.
 
+**Live demo: https://viberec-iota.vercel.app**
+
 Built end to end: data collection and statistics, a learned "vibe" model, collaborative filtering, learning to rank, LLM-powered search, explainability, a PostgreSQL + pgvector back end on AWS, and a Next.js front end.
 
 ## What it does
