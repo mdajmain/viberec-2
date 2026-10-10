@@ -1,7 +1,8 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  VibeRec (Step 13, option A): one t4g.micro server running the web app and PostgreSQL + pgvector in Docker,
-  an S3 bucket for the app image and the database backup, and an IAM role for Bedrock + S3. No SSH: use Session Manager.
+  VibeRec API: one t4g.micro server running the FastAPI service and PostgreSQL + pgvector in Docker, a fixed address
+  (Elastic IP), CloudFront in front of it for HTTPS, an S3 bucket for the app image, database backups and data, and an
+  IAM role for Bedrock + S3. No SSH: use Session Manager. The website runs on Vercel and calls the API through CloudFront.
   Deleting this stack deletes everything it created (empty the bucket first).
 
 Parameters:
@@ -35,6 +36,12 @@ Resources:
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-backups              # nightly database backups are kept for 14 days
+            Status: Enabled
+            Prefix: backups/
+            ExpirationInDays: 14
 
   BucketPolicy:
     Type: AWS::S3::BucketPolicy
@@ -150,13 +157,47 @@ Resources:
           chmod 700 /opt/viberec/start.sh
           /opt/viberec/start.sh
 
+  ServerIP:                                     # a fixed public address, so CloudFront's origin never changes
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref Server
+      Tags: [{Key: Name, Value: viberec}]
+
+  ApiCdn:                                       # HTTPS for the API: Vercel -> CloudFront (HTTPS) -> EC2 (port 80)
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: VibeRec API over HTTPS
+        PriceClass: PriceClass_100
+        HttpVersion: http2
+        Origins:
+          - Id: viberec-api
+            DomainName: !Join ["", ["ec2-", !Join ["-", !Split [".", !Ref ServerIP]], ".", !Ref "AWS::Region", ".compute.amazonaws.com"]]
+            CustomOriginConfig:
+              HTTPPort: 80
+              OriginProtocolPolicy: http-only
+              OriginReadTimeout: 60              # a new search waits for two Claude calls (about 10 s)
+        DefaultCacheBehavior:
+          TargetOriginId: viberec-api
+          ViewerProtocolPolicy: https-only
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+          CachedMethods: [GET, HEAD]
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad          # AWS managed: CachingDisabled
+          OriginRequestPolicyId: 216adef6-5c7f-47e4-b989-5492eafa07d3  # AWS managed: AllViewer (passes the API key header)
+          Compress: true
+
 Outputs:
   BucketName:
     Value: !Ref Bucket
     Description: Upload the app image to app/ and the database backup to db/ here.
-  WebsiteURL:
-    Value: !Sub http://${Server.PublicDnsName}
-    Description: VibeRec, once the server has finished setting itself up (a few minutes after the uploads).
+  ApiURL:
+    Value: !Sub https://${ApiCdn.DomainName}
+    Description: The API's HTTPS address; set it as VIBEREC_API_URL in Vercel.
+  ServerAddress:
+    Value: !Ref ServerIP
+    Description: The server's fixed public IP (the API on port 80, behind CloudFront).
   InstanceId:
     Value: !Ref Server
   AppRoleName:
