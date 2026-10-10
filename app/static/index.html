@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VibeRec</title>
+<style>
+  :root {
+    --bg: #faf8f5; --card: #ffffff; --ink: #1d1b19; --muted: #6b655e; --line: #e7e2db;
+    --accent: #c2410c; --accent-ink: #ffffff; --chip: #f3ede6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #151311; --card: #1f1c19; --ink: #f2eee9; --muted: #a39c93; --line: #332e29;
+            --accent: #fb923c; --accent-ink: #1d1b19; --chip: #2a2622; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 28px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  form { display: flex; gap: 8px; }
+  textarea { flex: 1; min-height: 56px; resize: vertical; padding: 12px; border-radius: 10px; border: 1px solid var(--line);
+             background: var(--card); color: var(--ink); font: inherit; }
+  button { border: 0; border-radius: 10px; padding: 0 18px; background: var(--accent); color: var(--accent-ink);
+           font: inherit; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: .6; cursor: default; }
+  .examples { margin: 10px 0 24px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .examples a { font-size: 13px; color: var(--muted); background: var(--chip); padding: 4px 10px; border-radius: 999px;
+                text-decoration: none; cursor: pointer; }
+  .understood { font-size: 14px; color: var(--muted); margin-bottom: 14px; }
+  .chip { display: inline-block; background: var(--chip); color: var(--ink); padding: 1px 8px; border-radius: 999px; margin: 2px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 12px; }
+  .title { font-weight: 650; font-size: 18px; }
+  .meta { color: var(--muted); font-size: 14px; }
+  .why { margin: 8px 0 6px; }
+  details { font-size: 14px; color: var(--muted); }
+  .fb { margin-top: 10px; display: flex; gap: 6px; }
+  .fb button { background: var(--chip); color: var(--ink); font-weight: 500; font-size: 13px; padding: 4px 10px; }
+  .fb button.sent { outline: 2px solid var(--accent); }
+  .err { color: var(--accent); }
+  @media (max-width: 520px) { form { flex-direction: column; } button { padding: 10px; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>VibeRec</h1>
+  <p class="sub">Name a movie you love, then say what feel you want. VibeRec finds films with that vibe.</p>
+  <form id="f">
+    <textarea id="q" placeholder="Something like How to Lose a Guy in 10 Days, but more urban, working people"></textarea>
+    <button id="go" type="submit">Find</button>
+  </form>
+  <div class="examples" id="ex"></div>
+  <div id="out"></div>
+</main>
+<script>
+const examples = [
+  "A light, funny romance like How to Lose a Guy in 10 Days",
+  "Something emotional like Forrest Gump, but all positive",
+  "Like The Hangover, extremely funny, genuine comedy",
+  "A superhero movie like The Amazing Spider-Man, maybe animated"
+];
+const ex = document.getElementById("ex"), out = document.getElementById("out"), q = document.getElementById("q");
+examples.forEach(t => { const a = document.createElement("a"); a.textContent = t; a.onclick = () => { q.value = t; run(); }; ex.appendChild(a); });
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const chips = (label, xs) => xs && xs.length ? `${label} ${xs.map(x => `<span class="chip">${esc(x.replaceAll("_", " "))}</span>`).join("")}` : "";
+
+async function run() {
+  const prompt = q.value.trim();
+  if (prompt.length < 3) return;
+  const go = document.getElementById("go"); go.disabled = true; go.textContent = "Finding…";
+  out.innerHTML = "";
+  try {
+    const r = await fetch("/search", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt }) });
+    if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
+    const d = await r.json(), u = d.understood;
+    out.innerHTML = `<div class="understood">${[chips("Like", u.sample_movies), chips("Genre", u.genres), chips("More", u.more_of),
+      chips("Less", u.less_of), chips("About", u.about)].filter(Boolean).join(" · ") || "No sample movie found; searching by feel."}</div>` +
+      (d.results.length ? d.results.map(m => `
+      <div class="card">
+        <div class="title">${esc(m.title)}</div>
+        <div class="meta">${esc(m.year ?? "")} · ${esc(m.genres.join(", "))}</div>
+        <div class="why">${esc(m.why)}</div>
+        ${m.premise ? `<details><summary>The setup</summary>${esc(m.premise)}</details>` : ""}
+        <div class="fb" data-id="${m.movie_id}">
+          <button data-v="up">👍</button><button data-v="down">👎</button><button data-v="not_this_vibe">Not this vibe</button>
+        </div>
+      </div>`).join("") : `<p>No films found for that.</p>`);
+    out.querySelectorAll(".fb button").forEach(b => b.onclick = async () => {
+      const id = Number(b.parentElement.dataset.id);
+      await fetch("/feedback", { method: "POST", headers: { "Content-Type": "application/json" },
+                                 body: JSON.stringify({ prompt, movie_id: id, verdict: b.dataset.v }) });
+      b.parentElement.querySelectorAll("button").forEach(x => x.classList.remove("sent")); b.classList.add("sent");
+    });
+  } catch (e) { out.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+  go.disabled = false; go.textContent = "Find";
+}
+document.getElementById("f").onsubmit = e => { e.preventDefault(); run(); };
+</script>
+</body>
+</html>
